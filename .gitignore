@@ -3,3 +3,4 @@ gasans_summary*.csv
 structure.csv
 Testing_GAMultiprocess.py
 *.pyc
+./.vscode/
