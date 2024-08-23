@@ -1,0 +1,5 @@
+best_model*.csv
+gasans_summary*.csv
+structure.csv
+Testing_GAMultiprocess.py
+*.pyc
