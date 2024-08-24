@@ -641,7 +641,7 @@ class GAEnsembleOpt:
         else:
             parameter_cols = parameter_cols + ensemble_cols + pdb_cols 
 
-        print(parameter_cols)
+        #print(parameter_cols)
         gasans_summary_df = pd.DataFrame(index=range(0, self.n_iter, 1), columns=parameter_cols)
         
         ## Order the self.itbest_rchi2
@@ -680,7 +680,17 @@ def _read_SANSFiles(sans_dir: Path, sans_struct, qmin=0.0, qmax=0.5, nq=501):
     
     return scatteringdf
 
-
+def _read_experiment_data(dataloc,):
+    
+    expdata_df = pd.read_csv(dataloc, delim_whitespace=True, comment='#', header=None)
+    if expdata_df.shape[1] == 3:
+        expdata_df.columns = ['Q', 'I(Q)', 'Error']
+    elif expdata_df.shape[1] == 4: 
+        expdata_df.columns = ['Q','I(Q)','Error','dQ']
+    else:
+        print(f'Experimental Data not in 3 or 4 column format to read. The shape of the read data is {expdata_df.shape}')
+        raise SystemExit('')
+    return expdata_df
 
 if __name__=="__main__":
 
@@ -695,25 +705,22 @@ if __name__=="__main__":
     path2sans = Path(config_filelist['scatter_dir'])
 
     ## Need to make this arbirary read to also remove comments
-    exp_etfoxidized_smoothed = pd.read_csv(config_filelist['experiment'],
-                                       delim_whitespace=True, header=None, 
-                                         names=['Q','I(Q)','Error'])
-    exp_etfoxidized_smoothed['I(Q)'] = exp_etfoxidized_smoothed['I(Q)'] + 0.00013
+    experiment_datadf = _read_experiment_data(config_filelist['experiment'])
+    qmin = 0.08
+    qmax = 0.35 
 
-    
     ScatStructureDF = pd.read_csv(config_filelist['structurefile'])
     print(ScatStructureDF.head())
     
     ## Changed to local path or like MultiFOXS a txt file of paths to scattering intensities
     ## 
-
     ensemble_scatteringdf = _read_SANSFiles(config_filelist['scatter_dir'], ScatStructureDF)
 
-    exp_qmax_ndx = np.where(exp_etfoxidized_smoothed['Q']<0.35)[0][-1]
+    exp_qmax_ndx = np.where(experiment_datadf['Q']<qmax)[0][-1]
     for enssize_config in config_ga_input:
         print(f"Running Genetic Algorithm for Ensemble Size:{enssize_config['ensemble_size']}")
         GARes = GAEnsembleOpt(ensemble_scatteringdf,
-                              exp_etfoxidized_smoothed.iloc[1:exp_qmax_ndx],
+                              experiment_datadf.iloc[1:exp_qmax_ndx],
                               **enssize_config
     #                        #ens_size=2, n_gen=5, n_iter=5, ens_split=1.0,
     #                        #mut_prob=0.1,elitism=False, invabsx2=True, parallel=True,
