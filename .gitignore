@@ -4,3 +4,4 @@ structure.csv
 Testing_GAMultiprocess.py
 *.pyc
 ./.vscode/
+read_experiment_data.py
