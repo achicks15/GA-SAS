@@ -17,7 +17,6 @@ Call GASANS-dask.py in your local directory with the properly set up config_test
 GASANS-dask.py will output a csv file with the best_model parameters and the scattering curve of the best fitting model.  
 
 ## To Do:
-1. Update the reader for experiment files for general reads of experimental data, Q, I(Q), $\sigma I(Q)$. 
-2. Have a way to read in best_model parameters incase users want to look at the all together or recalculate. 
-3. Fitting ranges for the data, qmin qmax, parameters 
-4. Parameter to select the fraction of CPUs you want to parallize with. 
+1. Have a way to read in best_model parameters incase users want to look at the all together or recalculate. 
+2. Fitting ranges for the data, qmin qmax, parameters 
+3. Parameter to select the fraction of CPUs you want to paralellize over. 
