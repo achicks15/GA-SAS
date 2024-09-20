@@ -1,6 +1,6 @@
 {"files": {
-    "experiment":"/Users/9cq/Documents/Projects/Bilbo-MD_SANS/For_Sharique/smoothed_ETF_OXI_3mgL.dat",
-    "scatter_dir":"/Users/9cq/Documents/Projects/Bilbo-MD_SANS/For_Sharique/fit",
+    "experiment":"./SANS.dat",
+    "scatter_dir":"./",
     "structurefile":"structure.csv"
 },
 "max_ensemble_size":4,
