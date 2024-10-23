@@ -339,11 +339,12 @@ class GAEnsembleOpt:
         ##current best valid solutions
         #rel_rchi2 = selfself.cbest_rchi2
         fitmax_index = np.where(vu_fitness[unq_solut_ndx] == vu_fitness[unq_solut_ndx].max())[0]
-        vufitmax=unq_solut_ndx[fitmax_index]
+        vufitmax = unq_solut_ndx[fitmax_index]
         ##{ 'chi2':0,'fitness', 'ensemble':[0]*self.n_gen, 'gen_found':0, 'fit_pars':{}}
         
-        if vu_fitness.max() > self.cbest_rchi2['fitness']:
+        if np.all(vu_fitness.max() > self.cbest_rchi2['fitness']):
             
+            #if vu
             print(f"Fitness updated from {self.cbest_rchi2['fitness']} to {vu_fitness[unq_solut_ndx].max()}")
             
             self.pbest_rchi2 = self.cbest_rchi2
@@ -603,7 +604,7 @@ class GAEnsembleOpt:
     def evaluate_bestfit(self):
         bestpars = gen_modelparams(self.ens_size, self.cbest_rchi2['fit_pars'])
         best_model = _residual_lmf(bestpars,
-                                        self.data[self.cbest_rchi2['ensemble'][0]].values.T)
+                                        self.data[self.cbest_rchi2['ensemble'][0]].values)
         return best_model 
     
     def _write_bestmodel(self, foutname: Path = Path('./'), err=True):
@@ -665,7 +666,6 @@ class GAEnsembleOpt:
 def _read_SANSFiles(sans_dir: Path, sans_struct, qmin=0.0, qmax=0.5, nq=501):
     """
     Read in the sans files 
-    This may be part of the GA object soon? Why have 
     """
 
     scatteringdf = pd.DataFrame(index=np.linspace(qmin,qmax,nq),
@@ -706,8 +706,8 @@ if __name__=="__main__":
 
     ## Need to make this arbirary read to also remove comments
     experiment_datadf = _read_experiment_data(config_filelist['experiment'])
-    qmin = 0.08
-    qmax = 0.35 
+    qmin = 0.02
+    qmax = 0.45 
 
     ScatStructureDF = pd.read_csv(config_filelist['structurefile'])
     print(ScatStructureDF.head())
@@ -721,12 +721,12 @@ if __name__=="__main__":
         print(f"Running Genetic Algorithm for Ensemble Size:{enssize_config['ensemble_size']}")
         GARes = GAEnsembleOpt(ensemble_scatteringdf,
                               experiment_datadf.iloc[1:exp_qmax_ndx],
-                              **enssize_config
+                              **enssize_config  
     #                        #ens_size=2, n_gen=5, n_iter=5, ens_split=1.0,
     #                        #mut_prob=0.1,elitism=False, invabsx2=True, parallel=True,
                             )
     
-        with distributed.LocalCluster(n_workers=int(0.4*os.cpu_count()),
+        with distributed.LocalCluster(n_workers=int(0.8*os.cpu_count()),
                                   processes=True,
                                   threads_per_worker=1,
                                   ) as cluster, distributed.Client(cluster) as client:
