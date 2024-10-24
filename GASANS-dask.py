@@ -311,7 +311,7 @@ class GAEnsembleOpt:
         validate_time_start = time.time()
         
         valid_solutions = ~np.any(self.gen_paramfit.iloc[2:,:]<self.cut_weight,axis=0)
-        unique_ensembles = np.apply_along_axis(unique_arr, 1, self.parents)
+        unique_ensembles = np.apply_along_axis(unique_arr, 1, self.parents) ## For unique elements within the parent
         
         vu_indices = np.where(valid_solutions&unique_ensembles)[0]
         vu_parents = self.parents[valid_solutions&unique_ensembles]
@@ -323,9 +323,9 @@ class GAEnsembleOpt:
         ## remove duplicate parents
         ### Check sizes to make sure their are valid solutions. If no valid solutions,
         ### race condition met and start a new iteration. 
-        unique_sol, unq_solut_ndx  = np.unique(vu_parents, axis=0, return_index=True)
-        if len(unq_solut_ndx) == 0.0:
-            print(f'No valid solutions found given the bounds. This occured at iteration {self.curr_gen} and generation {self.curr_gen}.')
+        unique_sol, unq_solut_ndx  = np.unique(vu_parents, axis=0, return_index=True) ## Duplicate parents in the validation ensemble
+        if len(unq_solut_ndx) == 1.0:
+            print(f'Only one unique parent solution found. This occured at iteration {self.curr_iter} and generation {self.curr_gen}.')
             print(f'Moving onto the next iteration')
             self.check_genconvergence=True
             return None 
@@ -338,11 +338,14 @@ class GAEnsembleOpt:
         
         ##current best valid solutions
         #rel_rchi2 = selfself.cbest_rchi2
-        fitmax_index = np.where(vu_fitness[unq_solut_ndx] == vu_fitness[unq_solut_ndx].max())[0]
+        vu_fitmax_value, fitmax_index = vu_fitness[unq_solut_ndx].max(), [vu_fitness[unq_solut_ndx].argmax()] 
+        #fitmax_index_old= np.where(vu_fitness[unq_solut_ndx] == vu_fitness[unq_solut_ndx].max())[0]
+        #print(fitmax_index, fitmax_index_old)
         vufitmax = unq_solut_ndx[fitmax_index]
+
         ##{ 'chi2':0,'fitness', 'ensemble':[0]*self.n_gen, 'gen_found':0, 'fit_pars':{}}
         
-        if np.all(vu_fitness.max() > self.cbest_rchi2['fitness']):
+        if vu_fitmax_value > self.cbest_rchi2['fitness']:
             
             #if vu
             print(f"Fitness updated from {self.cbest_rchi2['fitness']} to {vu_fitness[unq_solut_ndx].max()}")
@@ -365,7 +368,7 @@ class GAEnsembleOpt:
             self.fitness_saturation += 1
             
         ## Update the best over the iteration
-        if vu_fitness.max() > self.citbest_rchi2['fitness']:
+        if vu_fitmax_value > self.citbest_rchi2['fitness']:
             
             #print(f"Fitness updated from {self.citbest_rchi2['fitness']['fitness']} to {vu_fitness[unq_solut_ndx].max()}")
             
