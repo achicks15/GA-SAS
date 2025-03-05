@@ -1,6 +1,8 @@
 
 #!/bin/python 
-
+"""
+Author: Alan Hicks, PhD
+"""
 import numpy as np
 import pandas as pd 
 #import matplotlib
@@ -19,8 +21,19 @@ import time
 from read_json_input import _read_json_input
 
 
+def _intperp_chi2(sasdata, expdata, ddof=1):
+    """Function to interpolate to the experimental q values, scl """
+    interp_Iq = scpint.splrep(sasdata.index.values, sasdata.values, s=0)
+    IQ_Exp = scpint.splev(expdata['Q'].values, interp_Iq, der=0)
+
+    residuals, chi2 = reduced_chi2(expdata['I(Q)'].values, IQ_Exp, expdata['Error'].values, ddof)
+
+    return residuals, chi2
+
 def reduced_chi2(expected, model, sigma_exp, ddof=1):
-    return (np.power((model-expected)/sigma_exp,2)).sum()/(sigma_exp.shape[0]-ddof)
+    nfree = (sigma_exp.shape[0]-ddof)
+    residuals = (model-expected)/sigma_exp
+    return residuals, (np.power(residuals,2)).sum()/nfree
 
 def unique_arr(arr):
     return (np.unique(arr).shape[0] == arr.shape[0])
@@ -57,17 +70,19 @@ def _residual_lmf(pars, I, data=None, sigma=None):
     b = parvals['b']
     wkeys = list(parvals.keys())[2:]
     wparms = [parvals[ky] for ky in wkeys]
+    
     I=I.reshape(-1,len(wkeys))
-    #print(I[:,0].shape,data.shape)
+    #print(I[:,0].shape,data.shape,flush=True)
     model = c*(np.array([wparms[n]*I[:,n] for n in range(I.shape[1])]).sum(axis=0)) + b
     
     #print(model.shape)
     if np.all(data) == None:
+        #print(I.shape)
         return model
-    if np.all(sigma) == None:
-        return (data-model)
+    elif np.all(sigma) == None:
+        return (model-data)
     else:
-        return (data-model)/sigma
+        return (model-data)/sigma
     
     
 def gen_modelparams(ens_size, param_dict={})->None:
@@ -109,19 +124,23 @@ def fitness(set_data, expdata, ens_size, fitting_algorithm='Differential Evoluti
         sigmaI = expdata['Error'].values
     else:
         sigmaI = None
-            
+    
+    
     minimize_fit = lmf.minimize(_residual_lmf, mpars,
                                     method=fitting_algorithm,
                                     args=(set_data, ),
                                     kws={'data':expdata.iloc[:,1].values,
                                        'sigma':sigmaI},
                                     )
-        
+
+    eval_model = _residual_lmf(minimize_fit.params, set_data)     
+    #print(f"Number of degrees of freedom: {minimize_fit.nfree}")
     ## X2 is not the fitness here, the weight in choose_parents is so should be adjusted accordingly
     ## 
     #self.gen_fitness[self.curr_gen, data_index]  = minimize_fit.redchi
     result = {'success':minimize_fit.success, 'nfev':minimize_fit.nfev, 'eval_time':(time.time() - fit_time_start), 
-                  'chi2':minimize_fit.redchi, 'aic':minimize_fit.aic, 'params':minimize_fit.params.valuesdict(),}
+                'chi2':minimize_fit.redchi, 'aic':minimize_fit.aic, 'params':minimize_fit.params.valuesdict(),
+                  'model':eval_model, 'residuals':minimize_fit.residual}
         
     return result
 
@@ -196,7 +215,9 @@ class GAEnsembleOpt:
         self.gen_fitness = np.zeros((self.n_gen, self.n_ens))
         self.gen_rchi2 = np.zeros((self.n_gen, self.n_ens))
         self.gen_aic = np.zeros((self.n_gen, self.n_ens))
-        
+        self.gen_residuals = np.zeros((self.n_ens, self.experiment.shape[0])) ## residuals per generation 
+        self.gen_models = np.zeros((self.n_ens, self.experiment.shape[0])) ## residuals per generation 
+
         self.fitness_check = np.ones((self.n_ens, self.n_gen)) ## checks to see if the fit produces proper weights
         self.p_crossover = crossover_probability
         self.p_mutate = mutation_probability 
@@ -208,10 +229,10 @@ class GAEnsembleOpt:
         self.fitness_saturation = 0 ## count how many generations have the same minimum 
         self.pbest_rchi2 = {'chi2':0, 'aic':0, 'fitness':0,
                             'ensemble':[0]*self.n_gen, 'gen_found':0,
-                            'fit_pars':{}} ## previous best aic
+                            'fit_pars':{}, 'model':[], 'residuals':{}} ## previous best aic
         
         ## start at aic -np.inf ==> RelLikelihood=0, same with rchi2
-        self.cbest_rchi2 = {'chi2':np.inf, 'aic':np.inf, 'fitness':0, 'ensemble':[0]*self.n_gen, 'gen_found':0, 'fit_pars':{}} ## current best aic 
+        self.cbest_rchi2 = {'chi2':np.inf, 'aic':np.inf, 'fitness':0, 'ensemble':[0]*self.n_gen, 'gen_found':0, 'fit_pars':{}, 'model':[],'residuals':[]} ## current best aic 
         self.citbest_rchi2 = self.pbest_rchi2
         self.itbest_rchi2 = [dict() for n in range(self.n_iter)] 
         
@@ -246,21 +267,24 @@ class GAEnsembleOpt:
         """
         eval_time_start = time.time()
         ensemble_scattering_parents = np.rollaxis(self.interp_data.values[self.parents,:], 2, 1)
+        #print(ensemble_scattering_parents.shape)
         
-        
-        mfit_array = {}
+        mfit_array = []
         if self.parallel:
             #with distributed.LocalCluster(n_workers=self.cpus,
             #                  processes=True,
             #                  threads_per_worker=1,
             #                 ) as cluster, distributed.Client(cluster) as client:
                 
-            fitmap = client.map(fitness, ensemble_scattering_parents, expdata = self.experiment,
+            futures_fitmap = client.map(fitness, ensemble_scattering_parents, expdata = self.experiment,
                                  ens_size=self.ens_size, fitting_algorithm=self.fitting_algorithm)
-            fitmap_seq = distributed.as_completed(fitmap)
+            distributed.wait(futures_fitmap)
+            mfit_array = client.gather(futures_fitmap)
+            #print(len(mfit_array))
+            #fitmap_seq = distributed.as_completed(futures_fitmap)
                 
-            for nfit, fit in enumerate(fitmap_seq):
-                mfit_array.update({nfit:fit.result()})
+            #for nfit, fit in enumerate(fitmap_seq):
+            #    mfit_array.update({nfit:fit.result()})
         else:
             for nfit, ens_data in enumerate(ensemble_scattering_parents):
                 #print(datindex)
@@ -271,11 +295,13 @@ class GAEnsembleOpt:
         self.gen_paramfit = pd.DataFrame(index=list(mfit_array[0]['params'].keys()),
                                          columns=np.arange(0,self.n_ens)).fillna(0.0)
         
-        for data_index in list(mfit_array.keys()):
+        for data_index, fit_results in enumerate(mfit_array):
             self.gen_rchi2[self.curr_gen, data_index] = mfit_array[data_index]['chi2']
             self.gen_aic[self.curr_gen, data_index] = mfit_array[data_index]['aic']
             self.gen_paramfit.loc[list(mfit_array[0]['params'].keys()), data_index] = list(mfit_array[data_index]['params'].values())
             self.individual_fitness_time[data_index] = mfit_array[data_index]['eval_time']
+            self.gen_models[data_index,:] = mfit_array[data_index]['model']
+            self.gen_residuals[data_index,:] = mfit_array[data_index]['residuals']
 
         if self.method == "prob":
             if (not self.invabsx2): ## if invabsx2 is False, use the standard inversion
@@ -319,7 +345,9 @@ class GAEnsembleOpt:
         vu_aic = self.gen_aic[self.curr_gen, valid_solutions&unique_ensembles]
         vu_chi2 = self.gen_rchi2[self.curr_gen, valid_solutions&unique_ensembles]
         vu_fitness = self.gen_fitness[self.curr_gen, valid_solutions&unique_ensembles]
-        
+        vu_residuals = self.gen_residuals[valid_solutions&unique_ensembles,:]
+        vu_model = self.gen_models[valid_solutions&unique_ensembles,:]
+        #print(vu_residuals)
         ## remove duplicate parents
         ### Check sizes to make sure their are valid solutions. If no valid solutions,
         ### race condition met and start a new iteration. 
@@ -348,16 +376,19 @@ class GAEnsembleOpt:
         if vu_fitmax_value > self.cbest_rchi2['fitness']:
             
             #if vu
-            print(f"Fitness updated from {self.cbest_rchi2['fitness']} to {vu_fitness[unq_solut_ndx].max()}")
+            print(f"Fitness updated from {self.cbest_rchi2['fitness']} to {vu_fitness[unq_solut_ndx].max()}", flush=True)
             
             self.pbest_rchi2 = self.cbest_rchi2
             #self.cbest_aic['aic'] = vu_aic[unq_solut_ndx].min()
-            self.cbest_rchi2['chi2'] = vu_chi2[vufitmax]
-            self.cbest_rchi2['aic'] = vu_aic[vufitmax]
-            self.cbest_rchi2['fitness'] = vu_fitness[vufitmax]
-            self.cbest_rchi2['ensemble'] = vu_parents[vufitmax]
+            self.cbest_rchi2['chi2'] = vu_chi2[vufitmax][0]
+            self.cbest_rchi2['aic'] = vu_aic[vufitmax][0]
+            self.cbest_rchi2['fitness'] = vu_fitness[vufitmax][0]
+            self.cbest_rchi2['ensemble'] = vu_parents[vufitmax][0]
             self.cbest_rchi2['gen_found'] = self.curr_gen
-            #print(self.gen_paramfit.T[valid_solutions&unique_ensembles].iloc[vufitmax])
+            self.cbest_rchi2['residuals'] = vu_residuals[vufitmax][0]
+            self.cbest_rchi2['model'] = vu_model[vufitmax][0]
+            print(self.gen_paramfit.T[valid_solutions&unique_ensembles].iloc[vufitmax])
+            
             self.cbest_rchi2['fit_pars'] = self.gen_paramfit.T[valid_solutions&unique_ensembles].iloc[vufitmax].to_dict('list')
             ## convert dict entries to floats not lists
             for key in list(self.cbest_rchi2['fit_pars'].keys()):
@@ -373,12 +404,14 @@ class GAEnsembleOpt:
             #print(f"Fitness updated from {self.citbest_rchi2['fitness']['fitness']} to {vu_fitness[unq_solut_ndx].max()}")
             
             #self.cbest_aic['aic'] = vu_aic[unq_solut_ndx].min()
-            self.citbest_rchi2['chi2'] = vu_chi2[vufitmax]
-            self.citbest_rchi2['aic'] = vu_aic[vufitmax]
-            self.citbest_rchi2['fitness'] = vu_fitness[vufitmax]
-            self.citbest_rchi2['ensemble'] = vu_parents[vufitmax]
+            self.citbest_rchi2['chi2'] = vu_chi2[vufitmax][0]
+            self.citbest_rchi2['aic'] = vu_aic[vufitmax][0]
+            self.citbest_rchi2['fitness'] = vu_fitness[vufitmax][0]
+            self.citbest_rchi2['ensemble'] = vu_parents[vufitmax][0]
             self.citbest_rchi2['gen_found'] = self.curr_gen
-            #print(self.gen_paramfit.T[valid_solutions&unique_ensembles].iloc[vufitmax])
+            self.citbest_rchi2['residuals'] = vu_residuals[vufitmax][0]
+            self.citbest_rchi2['model'] = vu_model[vufitmax][0]
+            
             self.citbest_rchi2['fit_pars'] = self.gen_paramfit.T[valid_solutions&unique_ensembles].iloc[vufitmax].to_dict('list')
             ## convert dict entries to floats not lists
             for key in list(self.cbest_rchi2['fit_pars'].keys()):
@@ -484,7 +517,7 @@ class GAEnsembleOpt:
             ## pool is either saturated or a optimal set of conformations has been found
             ## else crossover
             if p1_check or p2_check:
-                print("crossed parents are not unique: continuing")
+                #print("crossed parents are not unique: continuing", flush=True)
                 continue
             else:
                 ## crossover
@@ -582,7 +615,7 @@ class GAEnsembleOpt:
                 if self.curr_gen>0:
                     self.parents = self.children
                 
-                print(f"Current Generation: {self.curr_gen}")
+                print(f"Current Generation: {self.curr_gen}", flush=True)
                 ## evaluate parents
                 self.evaluate(dask_client)
                 self.validate_and_update()
@@ -604,11 +637,20 @@ class GAEnsembleOpt:
             #self.validate_and_update()
             self.gen_converged = False
             
-    def evaluate_bestfit(self):
+    def evaluate_bestfit(self, chk_chi2=True):
         bestpars = gen_modelparams(self.ens_size, self.cbest_rchi2['fit_pars'])
+
         best_model = _residual_lmf(bestpars,
-                                        self.data[self.cbest_rchi2['ensemble'][0]].values)
-        return best_model 
+                                    self.data.loc[:,self.cbest_rchi2['ensemble']].values)
+        
+        if chk_chi2:
+            best_model_saved = self.cbest_rchi2['model'] ## length experimental data
+
+            residuals, rchi2 = _intperp_chi2(pd.Series(index=self.data.index.values,data=best_model), self.experiment, ddof=(self.ens_size+1))
+            residuals_saved, rchi2_saved = reduced_chi2(self.experiment.iloc[:,1].values, best_model_saved, self.experiment.iloc[:,2], ddof=(self.ens_size+1))
+            print(f"lmfit = {self.cbest_rchi2['chi2']}; strict_extract = {rchi2}; strict_saved={rchi2_saved}")
+            #print(residuals, self.cbest_rchi2['residuals'])
+        return best_model
     
     def _write_bestmodel(self, foutname: Path = Path('./'), err=True):
         #print(self.data.index.values.shape, self.evaluate_bestfit().shape)
@@ -619,7 +661,12 @@ class GAEnsembleOpt:
             bmdf['error'] = bmdf['intensity']*0.04
 
         bmdf.to_csv(f'{foutname}/best_model_EnsembleSize{self.ens_size}.csv', float_format='%E', sep=' ', index=None, columns=None)
-
+        fitpresiduals = pd.DataFrame(columns=['q','intensity','error','residuals'],
+                                      data=np.vstack([self.experiment.iloc[:,0].values,
+                                                       self.cbest_rchi2['model'],
+                                                         self.cbest_rchi2['model']*0.04, self.cbest_rchi2['residuals']]).T
+                                      )
+        fitpresiduals.to_csv(f'{foutname}/best_model_EnsembleSize{self.ens_size}_FitwResiduals.csv', float_format='%E', sep=' ', index=None, columns=None)
         return None
     
     def _write_parameterfile(self, pfile_name, structuredf, pfile_path: Path = Path('.')):
@@ -630,7 +677,7 @@ class GAEnsembleOpt:
         quality of fit: chi^2 , aic
         pdbname associated with the fits : provided by a separate file. pdbnames should be in the same order as the read in scattering data.
         probably similar to the GAJOE/NNLSJOE inputs 
-        Useful information:
+        Useful information: 
         Generation Found
         Ensemble Size
         Structural Parameters:  provided by a separate file. Ordered the same as the scattering data. Should be of format PDBNAME ... parameters
@@ -656,11 +703,12 @@ class GAEnsembleOpt:
             gasans_summary_df.loc[ni, 'ensemble_size'] = self.ens_size
             gasans_summary_df.loc[ni, 'generation_found'] = self.itbest_rchi2[ni]['gen_found']
             gasans_summary_df.loc[ni, list(self.itbest_rchi2[ni]['fit_pars'].keys())] = list(self.itbest_rchi2[ni]['fit_pars'].values())
-            gasans_summary_df.loc[ni, ensemble_cols] = self.itbest_rchi2[ni]['ensemble'][0]
-            gasans_summary_df.loc[ni, pdb_cols] = structuredf.iloc[self.itbest_rchi2[ni]['ensemble'][0],0].values
+            gasans_summary_df.loc[ni, ensemble_cols] = self.itbest_rchi2[ni]['ensemble']
+            gasans_summary_df.loc[ni, pdb_cols] = structuredf.iloc[self.itbest_rchi2[ni]['ensemble'],0].values
             if structuredf.shape[1]>2:
-                gasans_summary_df.loc[ni, structure_cols] = structuredf.iloc[self.itbest_rchi2[ni]['ensemble'][0],2:].values.flatten()
+                gasans_summary_df.loc[ni, structure_cols] = structuredf.iloc[self.itbest_rchi2[ni]['ensemble'],2:].values.flatten()
         
+        print(f"Writing parameter values for all iterations for ensemble size {self.ens_size}",flush=True)
         gasans_summary_df.sort_values('chi2').to_csv("{}/{}".format(pfile_path,pfile_name.format(self.ens_size)))
 
         return None
@@ -712,7 +760,7 @@ if __name__=="__main__":
     qmin = 0.02
     qmax = 0.45 
 
-    ScatStructureDF = pd.read_csv(config_filelist['structurefile'])
+    ScatStructureDF = pd.read_csv(config_filelist['structurefile']) 
     print(ScatStructureDF.head())
     
     ## Changed to local path or like MultiFOXS a txt file of paths to scattering intensities
